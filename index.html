@@ -410,6 +410,7 @@
               <li>Click and drag to draw trajectory paths</li>
               <li>Each drag creates a separate trajectory track</li>
               <li>Use Undo to remove the last drawn track</li>
+              <li><strong>Right-click on any trajectory to remove it</strong></li>
               <li>Hover over points to see coordinates</li>
             </ul>
           </div>
@@ -606,6 +607,8 @@
     let tempTrack = [];
     canvas.addEventListener('mousedown', e => {
       if (!img) return;
+      // Only respond to left mouse button (button 0)
+      if (e.button !== 0) return;
       drawing = true;
       tempTrack = [];
       const [x, y] = getXY(e);
@@ -646,10 +649,11 @@
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (img) drawResizedImageToCanvas(img, canvas.width, canvas.height);
       drawHistory.forEach((track, idx) => {
-        drawTrack(track, colors[idx % colors.length], idx);
+        const isHovered = idx === hoveredTrackIndex;
+        drawTrack(track, colors[idx % colors.length], idx, isHovered);
       });
       if (temp && temp.length > 0) {
-        drawTrack(temp, colors[drawHistory.length % colors.length], drawHistory.length);
+        drawTrack(temp, colors[drawHistory.length % colors.length], drawHistory.length, false);
       }
     }
 
@@ -839,15 +843,16 @@
       if (img) drawResizedImageToCanvas(img, canvas.width, canvas.height);
       // Draw all tracks from drawHistory
       drawHistory.forEach((track, idx) => {
-        drawTrack(track, colors[idx % colors.length], idx);
+        const isHovered = idx === hoveredTrackIndex;
+        drawTrack(track, colors[idx % colors.length], idx, isHovered);
       });
       // Draw current track (should always be empty in new undo mode, but for compatibility)
       if (currentTrack.length > 0) {
-        drawTrack(currentTrack, colors[drawHistory.length % colors.length], drawHistory.length);
+        drawTrack(currentTrack, colors[drawHistory.length % colors.length], drawHistory.length, false);
       }
     }
 
-    function drawTrack(track, color, trackIdx = 0) {
+    function drawTrack(track, color, trackIdx = 0, isHovered = false) {
       if (track.length === 0) return;
       
       // Scale track elements based on canvas size (normalize to 512px base)
@@ -857,6 +862,13 @@
       const endRadius = Math.max(3, 8 * scale);
       const arrowLength = Math.max(8, 22 * scale);
       const strokeWidth = Math.max(1, 3 * scale);
+      
+      // Add hover effect - thicker line and glow for hovered track
+      if (isHovered) {
+        ctx.shadowColor = '#ef4444';
+        ctx.shadowBlur = 8;
+        ctx.lineWidth = lineWidth * 1.5;
+      }
       
       // Use different gradients of the same color family for different tracks
       function getGradient(t) {
@@ -921,14 +933,23 @@
         ctx.arc(end.x, end.y, endRadius, 0, 2 * Math.PI);
         ctx.fill();
       }
+      
+      // Reset shadow effects
+      if (isHovered) {
+        ctx.shadowColor = 'transparent';
+        ctx.shadowBlur = 0;
+      }
     }
 
-    // 鼠标悬停显示坐标
+    // 鼠标悬停显示坐标和轨迹高亮
     let hoverPoint = null;
+    let hoveredTrackIndex = -1;
     canvas.addEventListener('mousemove', e => {
       if (drawing || !img) return;
       const [mx, my] = getXY(e);
       let found = null;
+      let newHoveredTrackIndex = -1;
+      
       // 检查所有轨迹点
       for (const track of [...allTracks, currentTrack]) {
         for (const pt of track) {
@@ -939,7 +960,14 @@
         }
         if (found) break;
       }
+      
+      // Check for track hovering (for right-click removal)
+      if (!drawing) {
+        newHoveredTrackIndex = findTrackAtPosition(mx, my);
+      }
+      
       hoverPoint = found;
+      hoveredTrackIndex = newHoveredTrackIndex;
       redraw();
       if (hoverPoint) {
         // 显示坐标提示
@@ -959,9 +987,95 @@
     canvas.addEventListener('mouseleave', e => {
       if (!drawing) {
         hoverPoint = null;
+        hoveredTrackIndex = -1;
         redraw();
       }
     });
+
+    // Right-click to remove trajectory track
+    canvas.addEventListener('contextmenu', e => {
+      e.preventDefault(); // Prevent default context menu
+      if (drawing || !img) return;
+      
+      const [mx, my] = getXY(e);
+      const clickedTrackIndex = findTrackAtPosition(mx, my);
+      
+      if (clickedTrackIndex !== -1) {
+        // Remove the clicked track
+        drawHistory.splice(clickedTrackIndex, 1);
+        updateTracksFromHistory();
+        
+        // Clear hover states to prevent visual artifacts
+        hoverPoint = null;
+        hoveredTrackIndex = -1;
+        
+        redraw();
+        updateJsonPanel();
+      }
+    });
+
+    // Function to find which track is at a given position
+    function findTrackAtPosition(x, y) {
+      const hitRadius = 15; // Radius to detect track clicks
+      
+      for (let i = 0; i < drawHistory.length; i++) {
+        const track = drawHistory[i];
+        
+        // Check if click is near any point in the track
+        for (const point of track) {
+          const distance = Math.sqrt((point.x - x) ** 2 + (point.y - y) ** 2);
+          if (distance <= hitRadius) {
+            return i;
+          }
+        }
+        
+        // Also check if click is near the track line segments
+        for (let j = 1; j < track.length; j++) {
+          const p1 = track[j - 1];
+          const p2 = track[j];
+          const distance = distanceToLineSegment(p1, p2, {x, y});
+          if (distance <= hitRadius) {
+            return i;
+          }
+        }
+      }
+      
+      return -1; // No track found at position
+    }
+
+    // Function to calculate distance from point to line segment
+    function distanceToLineSegment(p1, p2, point) {
+      const A = point.x - p1.x;
+      const B = point.y - p1.y;
+      const C = p2.x - p1.x;
+      const D = p2.y - p1.y;
+
+      const dot = A * C + B * D;
+      const lenSq = C * C + D * D;
+      
+      if (lenSq === 0) {
+        // p1 and p2 are the same point
+        return Math.sqrt(A * A + B * B);
+      }
+      
+      let param = dot / lenSq;
+      
+      let xx, yy;
+      if (param < 0) {
+        xx = p1.x;
+        yy = p1.y;
+      } else if (param > 1) {
+        xx = p2.x;
+        yy = p2.y;
+      } else {
+        xx = p1.x + param * C;
+        yy = p1.y + param * D;
+      }
+      
+      const dx = point.x - xx;
+      const dy = point.y - yy;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
 
     // --- Drag & Drop and Paste Image Support ---
     // Handle drag over canvas (show visual feedback)

@@ -95,6 +95,35 @@
       flex-wrap: wrap;
       align-items: center;
     }
+    .tool-group {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .toggle-btn {
+      padding: 8px 12px;
+      border: 1px solid #e0e0e0;
+      background: #fff;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 500;
+      color: #374151;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .toggle-btn.active {
+      background: #2563eb;
+      color: #fff;
+      border-color: #2563eb;
+      box-shadow: 0 2px 8px rgba(37,99,235,0.25);
+    }
+    .toggle-btn:hover {
+      background: #e5e7eb;
+    }
+    .toggle-btn.active:hover {
+      background: #1741a6;
+      color: #fff;
+    }
     .drawing-section {
       width: 100%;
     }
@@ -151,6 +180,60 @@
     }
     .restore-section {
       margin-top: 24px;
+    }
+    .track-section {
+      margin-top: 12px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .track-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 260px;
+      overflow-y: auto;
+    }
+    .track-item {
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid #e5e7eb;
+      background: #fff;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .track-item:hover {
+      border-color: #cbd5e1;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+    }
+    .track-item.active {
+      border-color: #2563eb;
+      box-shadow: 0 2px 10px rgba(37,99,235,0.18);
+      background: #eef2ff;
+    }
+    .track-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      color: #374151;
+      font-size: 0.95em;
+    }
+    .track-type {
+      font-size: 0.85em;
+      color: #6b7280;
+    }
+    .track-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
     }
     .restore-textarea {
       width: 100%;
@@ -399,6 +482,12 @@
             <input type="file" id="imgInput" accept="image/*">
             <button class="btn" id="undoBtn">Undo</button>
             <button class="btn" id="clearBtn">Clear</button>
+            <div class="tool-group">
+              <button class="toggle-btn active" id="modeDraw">Draw Path</button>
+              <button class="toggle-btn" id="modePoint">Add Anchor</button>
+              <button class="toggle-btn" id="modeSelect">Select</button>
+              <button class="toggle-btn" id="modeErase">Erase</button>
+            </div>
           </div>
           <canvas id="canvas" width="800" height="600"></canvas>
           <div class="how-to-draw">
@@ -406,9 +495,11 @@
               ✏️ How to Draw Trajectories:
             </div>
             <ul>
-              <li>Upload an image or drag & drop onto the canvas</li>
-              <li>Click and drag to draw trajectory paths</li>
-              <li>Each drag creates a separate trajectory track</li>
+              <li>Upload / paste / drag an image, or draw on a blank canvas</li>
+              <li>Draw Path: click and drag to create motion trajectories</li>
+              <li>Add Anchor: click once to place a static point</li>
+              <li>Select: click a track to highlight it, then delete or inspect</li>
+              <li>Erase: click a track to remove it</li>
               <li>Use Undo to remove the last drawn track</li>
               <li>Hover over points to see coordinates</li>
             </ul>
@@ -436,11 +527,22 @@
           </div>
         </div>
         <div class="json-panel" id="jsonPanel">{}</div>
+        <div class="track-section">
+          <div class="section-title">
+            <span class="step-number">4</span>
+            Tracks Overview
+          </div>
+          <div id="trackList" class="track-list"></div>
+          <div class="track-actions">
+            <button class="btn" id="deselectBtn">Deselect</button>
+            <button class="btn" id="deleteSelectedBtn">Delete Selected</button>
+          </div>
+        </div>
         
         <!-- Paste and Restore Trajectory Section -->
         <div class="restore-section">
           <div class="section-title">
-            <span class="step-number">4</span>
+            <span class="step-number">5</span>
             Restore Trajectory Data
           </div>
           <div class="json-header">Paste & Restore Trajectories</div>
@@ -477,6 +579,15 @@
     const jsonPanel = document.getElementById('jsonPanel');
     const copyJsonBtn = document.getElementById('copyJsonBtn');
     const fileLabel = document.querySelector('.custom-file-label');
+    const trackListEl = document.getElementById('trackList');
+    const deselectBtn = document.getElementById('deselectBtn');
+    const deleteSelectedBtn = document.getElementById('deleteSelectedBtn');
+    const modeButtons = {
+      draw: document.getElementById('modeDraw'),
+      point: document.getElementById('modePoint'),
+      select: document.getElementById('modeSelect'),
+      erase: document.getElementById('modeErase')
+    };
     
     // Paste and restore elements
     const pasteTextarea = document.getElementById('pasteTextarea');
@@ -488,11 +599,47 @@
     let drawing = false;
     let currentTrack = [];
     let allTracks = [];
+    let selectedTrackIndex = -1;
+    let toolMode = 'draw'; // draw, point, select, erase
     let colors = ['#2563eb', '#059669', '#f59e42', '#e11d48', '#a21caf', '#0ea5e9', '#fbbf24', '#10b981', '#f43f5e'];
     // Track hues for color gradients
     const trackHues = [210, 140, 30, 270, 0, 320, 180, 50, 90];
     // History of all drawing actions (each is a track segment drawn in one mouse drag)
     let drawHistory = [];
+
+    // Tool mode helpers
+    function setToolMode(mode) {
+      toolMode = mode;
+      Object.entries(modeButtons).forEach(([key, btn]) => {
+        if (!btn) return;
+        btn.classList.toggle('active', key === mode);
+      });
+      if (toolMode === 'draw' || toolMode === 'point') {
+        canvas.style.cursor = 'crosshair';
+      } else if (toolMode === 'select') {
+        canvas.style.cursor = 'pointer';
+      } else if (toolMode === 'erase') {
+        canvas.style.cursor = 'not-allowed';
+      }
+    }
+    Object.entries(modeButtons).forEach(([mode, btn]) => {
+      btn.addEventListener('click', () => setToolMode(mode));
+    });
+
+    deselectBtn.addEventListener('click', () => {
+      selectedTrackIndex = -1;
+      redraw();
+      updateTrackList();
+    });
+
+    deleteSelectedBtn.addEventListener('click', () => {
+      if (selectedTrackIndex === -1) return;
+      drawHistory.splice(selectedTrackIndex, 1);
+      updateTracksFromHistory();
+      selectedTrackIndex = -1;
+      redraw();
+      updateJsonPanel();
+    });
 
     // Process tracks to match ComfyUI's FIXED_LENGTH (121) and FPS conversion
     function processTracksForFPS(tracks, targetFPS) {
@@ -571,6 +718,40 @@
       }
       
       jsonPanel.textContent = JSON.stringify(displayData, null, 2);
+      updateTrackList();
+    }
+
+    function updateTrackList() {
+      if (!trackListEl) return;
+      trackListEl.innerHTML = '';
+      if (drawHistory.length === 0) {
+        const empty = document.createElement('div');
+        empty.textContent = 'No tracks yet';
+        empty.style.color = '#6b7280';
+        empty.style.padding = '4px 0';
+        trackListEl.appendChild(empty);
+        return;
+      }
+      drawHistory.forEach((track, idx) => {
+        const item = document.createElement('div');
+        item.className = 'track-item' + (idx === selectedTrackIndex ? ' active' : '');
+        const meta = document.createElement('div');
+        meta.className = 'track-meta';
+        const title = document.createElement('div');
+        title.textContent = `Track ${idx + 1} (${track.length} pt${track.length === 1 ? '' : 's'})`;
+        const type = document.createElement('div');
+        type.className = 'track-type';
+        type.textContent = track.length === 1 ? 'Static anchor' : 'Motion path';
+        meta.appendChild(title);
+        meta.appendChild(type);
+        item.appendChild(meta);
+        item.onclick = () => {
+          selectedTrackIndex = idx;
+          redraw();
+          updateTrackList();
+        };
+        trackListEl.appendChild(item);
+      });
     }
 
     // File input
@@ -581,12 +762,12 @@
     });
 
 
-    // Undo the last point of the current track
     // Undo button: remove the last drawing segment (mouse drag)
     undoBtn.addEventListener('click', () => {
       if (drawHistory.length > 0) {
         drawHistory.pop();
         updateTracksFromHistory();
+        if (selectedTrackIndex >= drawHistory.length) selectedTrackIndex = -1;
         redraw();
         updateJsonPanel();
       }
@@ -597,6 +778,7 @@
       allTracks = [];
       currentTrack = [];
       drawHistory = [];
+      selectedTrackIndex = -1;
       redraw();
       updateJsonPanel();
     });
@@ -605,25 +787,47 @@
     // --- Drawing logic: record each mouse drag as a segment in drawHistory ---
     let tempTrack = [];
     canvas.addEventListener('mousedown', e => {
-      if (!img) return;
-      drawing = true;
-      tempTrack = [];
       const [x, y] = getXY(e);
-      tempTrack.push({x, y});
-      redrawWithTemp(tempTrack);
+      if (toolMode === 'draw') {
+        drawing = true;
+        tempTrack = [];
+        tempTrack.push({x, y});
+        redrawWithTemp(tempTrack);
+      } else if (toolMode === 'point') {
+        drawHistory.push([{ x, y }]);
+        updateTracksFromHistory();
+        selectedTrackIndex = drawHistory.length - 1;
+        redraw();
+        updateJsonPanel();
+      } else if (toolMode === 'select') {
+        const idx = findTrackIndexAtPoint({ x, y });
+        selectedTrackIndex = idx;
+        redraw();
+        updateTrackList();
+      } else if (toolMode === 'erase') {
+        const idx = findTrackIndexAtPoint({ x, y });
+        if (idx !== -1) {
+          drawHistory.splice(idx, 1);
+          updateTracksFromHistory();
+          selectedTrackIndex = -1;
+          redraw();
+          updateJsonPanel();
+        }
+      }
     });
 
     canvas.addEventListener('mousemove', e => {
-      if (!drawing || !img) return;
+      if (!drawing || toolMode !== 'draw') return;
       const [x, y] = getXY(e);
       tempTrack.push({x, y});
       redrawWithTemp(tempTrack);
     });
 
     canvas.addEventListener('mouseup', e => {
-      if (drawing && tempTrack.length > 0) {
+      if (toolMode === 'draw' && drawing && tempTrack.length > 0) {
         drawHistory.push(tempTrack.slice()); // Save this segment
         updateTracksFromHistory();
+        selectedTrackIndex = drawHistory.length - 1;
         redraw();
         updateJsonPanel();
       }
@@ -631,9 +835,10 @@
       tempTrack = [];
     });
     canvas.addEventListener('mouseleave', e => {
-      if (drawing && tempTrack.length > 0) {
+      if (toolMode === 'draw' && drawing && tempTrack.length > 0) {
         drawHistory.push(tempTrack.slice());
         updateTracksFromHistory();
+        selectedTrackIndex = drawHistory.length - 1;
         redraw();
         updateJsonPanel();
       }
@@ -646,10 +851,10 @@
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (img) drawResizedImageToCanvas(img, canvas.width, canvas.height);
       drawHistory.forEach((track, idx) => {
-        drawTrack(track, colors[idx % colors.length], idx);
+        drawTrack(track, colors[idx % colors.length], idx, idx === selectedTrackIndex);
       });
       if (temp && temp.length > 0) {
-        drawTrack(temp, colors[drawHistory.length % colors.length], drawHistory.length);
+        drawTrack(temp, colors[drawHistory.length % colors.length], drawHistory.length, false);
       }
     }
 
@@ -658,6 +863,7 @@
       // allTracks: all finished tracks, currentTrack: empty
       allTracks = drawHistory.map(seg => seg.slice());
       currentTrack = [];
+      if (selectedTrackIndex >= drawHistory.length) selectedTrackIndex = -1;
     }
 
     // --- Image resizing and canvas size logic ---
@@ -771,6 +977,7 @@
       allTracks = [];
       currentTrack = [];
       drawHistory = [];
+      selectedTrackIndex = -1;
       
       // Convert trajectory data to drawHistory format
       for (const track of trajectoryData) {
@@ -833,21 +1040,63 @@
       ];
     }
 
+    function distanceToSegment(p, a, b) {
+      const A = p.x - a.x;
+      const B = p.y - a.y;
+      const C = b.x - a.x;
+      const D = b.y - a.y;
+      const dot = A * C + B * D;
+      const lenSq = C * C + D * D;
+      let param = -1;
+      if (lenSq !== 0) param = dot / lenSq;
+      let xx, yy;
+      if (param < 0) {
+        xx = a.x; yy = a.y;
+      } else if (param > 1) {
+        xx = b.x; yy = b.y;
+      } else {
+        xx = a.x + param * C;
+        yy = a.y + param * D;
+      }
+      const dx = p.x - xx;
+      const dy = p.y - yy;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function findTrackIndexAtPoint(point) {
+      const baseThreshold = Math.max(10, Math.min(canvas.width, canvas.height) / 80);
+      for (let i = drawHistory.length - 1; i >= 0; i--) {
+        const track = drawHistory[i];
+        if (!track || track.length === 0) continue;
+        if (track.length === 1) {
+          const p = track[0];
+          if (Math.hypot(point.x - p.x, point.y - p.y) <= baseThreshold) return i;
+          continue;
+        }
+        for (let j = 0; j < track.length - 1; j++) {
+          if (distanceToSegment(point, track[j], track[j + 1]) <= baseThreshold) {
+            return i;
+          }
+        }
+      }
+      return -1;
+    }
+
     function redraw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       // Draw resized image with bilinear interpolation, center align
       if (img) drawResizedImageToCanvas(img, canvas.width, canvas.height);
       // Draw all tracks from drawHistory
       drawHistory.forEach((track, idx) => {
-        drawTrack(track, colors[idx % colors.length], idx);
+        drawTrack(track, colors[idx % colors.length], idx, idx === selectedTrackIndex);
       });
       // Draw current track (should always be empty in new undo mode, but for compatibility)
       if (currentTrack.length > 0) {
-        drawTrack(currentTrack, colors[drawHistory.length % colors.length], drawHistory.length);
+        drawTrack(currentTrack, colors[drawHistory.length % colors.length], drawHistory.length, false);
       }
     }
 
-    function drawTrack(track, color, trackIdx = 0) {
+    function drawTrack(track, color, trackIdx = 0, isSelected = false) {
       if (track.length === 0) return;
       
       // Scale track elements based on canvas size (normalize to 512px base)
@@ -866,12 +1115,12 @@
         return `hsl(${hue}, 90%, ${l}%)`;
       }
 
-      ctx.lineWidth = lineWidth;
+      ctx.lineWidth = isSelected ? lineWidth + 2 : lineWidth;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       for (let i = 1; i < track.length; ++i) {
         const t = i / (track.length - 1);
-        ctx.strokeStyle = getGradient(t);
+        ctx.strokeStyle = isSelected ? '#0ea5e9' : getGradient(t);
         ctx.beginPath();
         ctx.moveTo(track[i - 1].x, track[i - 1].y);
         ctx.lineTo(track[i].x, track[i].y);
@@ -879,12 +1128,12 @@
       }
 
       // 起点大圆（绿色）
-      ctx.fillStyle = '#22c55e';
+      ctx.fillStyle = isSelected ? '#0ea5e9' : '#22c55e';
       ctx.beginPath();
       ctx.arc(track[0].x, track[0].y, startRadius, 0, 2 * Math.PI);
       ctx.fill();
-      ctx.strokeStyle = '#16a34a';
-      ctx.lineWidth = strokeWidth;
+      ctx.strokeStyle = isSelected ? '#0284c7' : '#16a34a';
+      ctx.lineWidth = isSelected ? strokeWidth + 1 : strokeWidth;
       ctx.beginPath();
       ctx.arc(track[0].x, track[0].y, startRadius, 0, 2 * Math.PI);
       ctx.stroke();
@@ -898,8 +1147,8 @@
         const len = Math.sqrt(dx * dx + dy * dy) || 1;
         const ux = dx / len, uy = dy / len;
         // 箭头主线
-        ctx.strokeStyle = '#ef4444';
-        ctx.lineWidth = Math.max(2, 5 * scale);
+        ctx.strokeStyle = isSelected ? '#0ea5e9' : '#ef4444';
+        ctx.lineWidth = Math.max(2, 5 * scale) + (isSelected ? 1 : 0);
         ctx.beginPath();
         ctx.moveTo(prev.x, prev.y);
         ctx.lineTo(end.x, end.y);
@@ -916,7 +1165,7 @@
           ctx.stroke();
         }
         // 终点圆
-        ctx.fillStyle = '#ef4444';
+        ctx.fillStyle = isSelected ? '#0ea5e9' : '#ef4444';
         ctx.beginPath();
         ctx.arc(end.x, end.y, endRadius, 0, 2 * Math.PI);
         ctx.fill();
@@ -926,7 +1175,7 @@
     // 鼠标悬停显示坐标
     let hoverPoint = null;
     canvas.addEventListener('mousemove', e => {
-      if (drawing || !img) return;
+      if (drawing) return;
       const [mx, my] = getXY(e);
       let found = null;
       // 检查所有轨迹点
@@ -1023,11 +1272,14 @@
       allTracks = [];
       currentTrack = [];
       drawHistory = [];
+      selectedTrackIndex = -1;
       updateJsonPanel();
     }
 
     // --- End Drag & Drop and Paste Support ---
 
+    // Initialize defaults
+    setToolMode('draw');
     // Initial JSON panel
     updateJsonPanel();
   </script>
